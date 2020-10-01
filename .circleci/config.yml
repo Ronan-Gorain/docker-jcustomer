@@ -16,7 +16,7 @@ orbs:
 
 commands:
   build_jcustomer:
-    description: "Build jCustomer images"
+    description: "Build jCustomer images and push them on a private repo for test purpose"
     parameters:
       repo:
         type: string
@@ -41,14 +41,10 @@ commands:
             --build-arg RELEASE_URL="<< parameters.base_url >>"
             --no-cache
             '
-
-  push_jcustomer_test:
-    description: Push jCustomer images on a private repo for test purpose
-    steps:
-      - docker/push:
-          step-name: "Push to test repo << parameters.repo >>:<< parameters.jver >>"
-          image: "<< parameters.repo >>"
-          tag: "<< parameters.jver >>"
+      #- docker/push:
+      #    step-name: "Push to test repo << parameters.repo >>:<< parameters.jver >>"
+      #    image: "<< parameters.repo >>"
+      #    tag: "<< parameters.jver >>"
       - slack/status:
           failure_message: |
             ':alert: Building jcustomer:<< parameters.jver >><< parameters.tag_suffix >> has failed !'
@@ -148,59 +144,7 @@ commands:
           success_message: |
             ':whale2: Publishing jcustomer:<< parameters.jver >><< parameters.tag_suffix >> successfully.'
 
-  save_context:
-    description: "Save workspace context for further use in other jobs"
-    parameters:
-      repo:
-        type: string
-        default: jahia/jcustomer_test
-      tag:
-        type: string
-      tag_suffix:
-        type: string
-    steps:
-      - run:
-          command: |
-            mkdir /tmp/images && docker save "<< parameters.repo >>":"<< parameters.tag >><< parameters.tag_suffix >>" > /tmp/images/saved_image.tar
-      - persist_to_workspace:
-          root: /tmp
-          paths:
-            - images
-
-  load_context:
-    description: "Load previously saved context"
-    steps:
-      - attach_workspace:
-          at: /tmp
-      - run:
-          command: |
-            docker load < /tmp/images/saved_image.tar
-
-  scan_local_image:
-    parameters:
-      repo:
-        type: string
-      tag:
-        type: string
-      tag_suffix:
-        type: string
-    steps:
-      - anchore/analyze_local_image:
-          image_name: "<< parameters.repo >>:<< parameters.tag >><< parameters.tag_suffix >>"
-          dockerfile_path: ./Dockerfile
-          timeout: '600'
-          policy_bundle_file_path: ".circleci/.anchore/policy_bundle.json"
-          policy_failure: true
-      - store_artifacts:
-          path: /root/project/anchore-reports
-          destination: anchore_reports
-      - slack/status:
-          failure_message: |
-            ':alert: Scanning << parameters.repo >>:<< parameters.tag >><< parameters.tag_suffix >> has failed'
-          success_message: |
-            ':mag: Scanned  << parameters.repo >>:<< parameters.tag >><< parameters.tag_suffix >> successfully'
-
-  scan_remote_image:
+  scan_image:
     description: "Pull and scan a docker image"
     parameters:
       image_name:
@@ -235,7 +179,6 @@ commands:
       - anchore/parse_reports
       - store_artifacts:
           path: anchore-reports
-
 
 ######### commun stuff
 tag_suffix: &tag_suffix
@@ -282,22 +225,6 @@ jobs:
           jver: "1.5.1"
           base_url: "https://downloads.jahia.com/downloads/jahia/jcustomer/jcustomer-1.5.1.tar.gz"
           <<: *tag_suffix
-      - save_context:
-          repo: jahia/jcustomer_test
-          tag: 1.5.1
-          <<: *tag_suffix
-
-  scan_151:
-    executor: anchore/anchore_engine
-    steps:
-      - setup_remote_docker
-      - checkout
-      - load_context
-      - scan_local_image:
-          repo: jahia/jcustomer_test
-          tag: 1.5.1
-          <<: *tag_suffix
-
   test_151:
     docker:
       - image: jahia/jcustomer_test:1.5.1
@@ -310,19 +237,19 @@ jobs:
       - test_jcustomer:
           jver: "1.5.1"
           <<: *tag_suffix
-  scan_remote_image:
+  scan_jcustomer_image:
     executor: anchore/anchore_engine
     parameters:
       image:
         type: string
     steps:
       - run:
-          command: apk update; apk add bash
-      - scan_remote_image:
+          command: apk update; apk add bash curl
+      - scan_image:
           image_name: "<< parameters.image >>"
           registry_user: "$DOCKER_LOGIN"
           registry_pass: "$DOCKER_PASSWORD"
-          slack_channel: "team-cloud-security"
+          slack_channel: "<< parameters.slack_channel >>"
 
   publish_151:
     executor: docker/docker
@@ -339,31 +266,34 @@ workflows:
     jobs:
       - build_151:
           <<: *job_options
-      - scan_151:
+      - test_151:
+          <<: *job_options
+          requires:
+            - build_151
+      - scan_jcustomer_image:
          <<: *job_options
+         image: jahia/jcustomer_test:1.5.1
+          slack_channel: team-cloud-notif
          requires:
            - build_151
-      #- test_151:
-      #    <<: *job_options
-      #    requires:
-      #      - build_151
 
-      #- human_validation:
-      #    type: approval
-      #    requires:
-      #      - test_151
-      #    <<: *job_options
-      #- slack/approval-notification:
-      #    include_project_field: true
-      #    message: ":female-police-officer: CircleCI requests your approval: please confirm that images are ready to be pushed in public repository..."
-      #    requires:
-      #      - test_151
-      #    <<: *job_options
+      - human_validation:
+          type: approval
+          requires:
+            - test_151
+          <<: *job_options
+      - slack/approval-notification:
+          include_project_field: true
+          message: ":female-police-officer: CircleCI requests your approval: please confirm that images are ready to be pushed in public repository..."
+          requires:
+            - test_151
+          <<: *job_options
 
-      #- publish_151:
-      #    <<: *job_options
-      #    requires:
-      #      - human_validation
+      - publish_151:
+          <<: *job_options
+          requires:
+            - human_validation
+
 
   weekly_scan:
     triggers:
@@ -371,6 +301,7 @@ workflows:
           cron: "0 1 * * 0"
           <<: *filters
     jobs:
-      - scan_remote_image:
+      - scan_jcustomer_image:
           <<: *job_options
           image: jahia/jcustomer:1.5.1
+          slack_channel: team-cloud-security
