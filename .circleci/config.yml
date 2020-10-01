@@ -283,12 +283,14 @@ workflows:
           type: approval
           requires:
             - test_151
+            - scan_jcustomer_image
           <<: *job_options
       - slack/approval-notification:
           include_project_field: true
           message: ":female-police-officer: CircleCI requests your approval: please confirm that images are ready to be pushed in public repository..."
           requires:
             - test_151
+            - scan_jcustomer_image
           <<: *job_options
 
       - publish_151:
