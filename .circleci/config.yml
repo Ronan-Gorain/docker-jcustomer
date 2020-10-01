@@ -242,6 +242,8 @@ jobs:
     parameters:
       image:
         type: string
+      slack_channel:
+        type: string
     steps:
       - run:
           command: apk update; apk add bash curl
@@ -273,7 +275,7 @@ workflows:
       - scan_jcustomer_image:
          <<: *job_options
          image: jahia/jcustomer_test:1.5.1
-          slack_channel: team-cloud-notif
+         slack_channel: team-cloud-notif
          requires:
            - build_151
 
